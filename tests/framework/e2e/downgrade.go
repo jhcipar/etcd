@@ -30,6 +30,7 @@ import (
 	pb "go.etcd.io/etcd/api/v3/etcdserverpb"
 	"go.etcd.io/etcd/api/v3/version"
 	"go.etcd.io/etcd/server/v3/etcdserver"
+	"go.etcd.io/etcd/tests/v3/framework/config"
 	"go.etcd.io/etcd/tests/v3/framework/testutils"
 )
 
@@ -133,6 +134,36 @@ func DowngradeUpgradeMembers(t *testing.T, lg *zap.Logger, clus *EtcdProcessClus
 	t.Logf("Elect members for operations on members: %v", membersToChange)
 
 	return DowngradeUpgradeMembersByID(t, lg, clus, membersToChange, downgradeEnabled, currentVersion, targetVersion)
+}
+
+func RollingReplacementUpgrade(t *testing.T, lg *zap.Logger, clus *EtcdProcessCluster, targetVersion *semver.Version) error {
+	ctx := t.Context()
+	// For each member to upgrade:
+	for _, member := range clus.Procs {
+		//     1. Add new member as learner (no local data) - use existing AddMember(..., addAsLearner=true)
+		newMemberID, _, err := clus.AddMember(ctx, nil, t, true, nil)
+		if err != nil {
+			return err
+		}
+
+		//     2. Wait for learner to sync (receive snapshot from leader)
+		//     3. Promote learner to voting member - use MemberPromote
+		// resp, merr := etcdctl.MemberPromote(ctx, memberID)
+
+		//     4. Stop old member
+		if member.Config().ExecPath == newExecPath {
+			return fmt.Errorf("member:%s is already running with the %s target binary - %s", member.Config().Name, opString, member.Config().ExecPath)
+		}
+		lg.Info(fmt.Sprintf("%s member", opString), zap.String("member", member.Config().Name))
+		if err := member.Stop(); err != nil {
+			return err
+		}
+
+
+	}
+	//     5. Remove old member from cluster
+	//     6. Repeat until all members upgraded
+	return nil
 }
 
 func DowngradeUpgradeMembersByID(t *testing.T, lg *zap.Logger, clus *EtcdProcessCluster, membersToChange []int, downgradeEnabled bool, currentVersion, targetVersion *semver.Version) error {
