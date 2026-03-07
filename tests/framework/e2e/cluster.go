@@ -151,6 +151,7 @@ type EtcdProcessClusterConfig struct {
 
 	EnvVars map[string]string
 	Version ClusterVersion
+	ExecPath string // NOTE: only applicable when Version is ClusterVersion
 
 	// Cluster setup config
 
@@ -678,6 +679,9 @@ func (cfg *EtcdProcessClusterConfig) binaryPath(i int) string {
 	switch cfg.Version {
 	case CurrentVersion:
 		execPath = BinPath.Etcd
+		if cfg.ExecPath != "" {
+			execPath = cfg.ExecPath
+		}
 	case MinorityLastVersion:
 		if i <= cfg.ClusterSize/2 {
 			execPath = BinPath.Etcd

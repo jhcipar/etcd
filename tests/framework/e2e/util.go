@@ -15,15 +15,22 @@
 package e2e
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math/rand"
+	"net/http"
 	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
 	"go.etcd.io/etcd/client/pkg/v3/testutil"
 	"go.etcd.io/etcd/pkg/v3/expect"
 )
@@ -176,4 +183,66 @@ func mergeEnvVariables(envVars map[string]string) []string {
 	}
 
 	return env
+}
+
+func DownloadReleaseBinary(t *testing.T, ver string) string {
+	arch := runtime.GOARCH
+	if arch == "386" {
+		arch = "amd64"
+	}
+	targetURL := fmt.Sprintf("https://github.com/etcd-io/etcd/releases/download/%s/etcd-%s-%s-%s.tar.gz",
+		ver, ver, runtime.GOOS, arch,
+	)
+
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	// NOTE: avoid background goroutine and pass leaked goroutine check
+	transport.DisableKeepAlives = true
+	cli := &http.Client{Transport: transport}
+
+	resp, err := cli.Get(targetURL)
+	require.NoError(t, err, "failed to http-get %s", targetURL)
+
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	gzReader, err := gzip.NewReader(resp.Body)
+	require.NoError(t, err, "%s should be gzip stream", targetURL)
+	defer gzReader.Close()
+
+	targetBinaryPath := filepath.Join(t.TempDir(), "etcd")
+
+	tr := tar.NewReader(gzReader)
+	for {
+		hdrInfo, err := tr.Next()
+		if err != nil {
+			require.Equal(t, io.EOF, err)
+			break
+		}
+
+		switch hdrInfo.Typeflag {
+		case tar.TypeReg, tar.TypeRegA:
+		default:
+			continue
+		}
+
+		if filepath.Base(hdrInfo.Name) != "etcd" {
+			continue
+		}
+
+		f, err := os.OpenFile(targetBinaryPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, os.FileMode(hdrInfo.Mode))
+		require.NoError(t, err, "failed to open file %s", targetBinaryPath)
+		defer f.Close()
+
+		err = os.Chmod(targetBinaryPath, os.FileMode(hdrInfo.Mode))
+		require.NoError(t, err, "failed to chmod %s", targetBinaryPath)
+
+		_, err = io.Copy(f, io.Reader(tr))
+		require.NoError(t, err, "failed to copy data into %s", targetBinaryPath)
+
+		require.NoError(t, f.Sync(), "failed to sync data into %s", targetBinaryPath)
+
+		return targetBinaryPath
+	}
+	t.Fatalf("failed to get etcd binary from %s", targetURL)
+	return "" // unreachable
 }
